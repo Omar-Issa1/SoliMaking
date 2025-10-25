@@ -5,14 +5,15 @@ import {
   NotFoundError,
   UnauthenticatedError,
 } from "../error/index.js";
-
+import fs from "fs";
 import {
   uploadVideo,
   getVideoDetails,
   deleteVideoFromVimeo,
+  uploadThumbnailToVimeo,
 } from "../utils/vimeo.js";
 import mongoose from "mongoose";
-
+import { vimeoAPI } from "../utils/vimeo.js";
 export const addMovie = async (req, res, next) => {
   const { title, description, vimeoUrl } = req.body;
 
@@ -136,11 +137,7 @@ export const deleteMovie = async (req, res, next) => {
   }
 
   if (movie.vimeoId) {
-    try {
-      await deleteVideoFromVimeo(movie.vimeoId);
-    } catch (err) {
-      console.warn("Failed to delete video from Vimeo:", err.message);
-    }
+    await deleteVideoFromVimeo(movie.vimeoId);
   }
 
   await Movie.findByIdAndDelete(id);
@@ -148,4 +145,52 @@ export const deleteMovie = async (req, res, next) => {
   res.json({
     message: "Movie deleted successfully from DB (and Vimeo if possible)",
   });
+};
+export const getVimeoUploadLink = async (req, res, next) => {
+  try {
+    const { size, title, description } = req.body;
+
+    const response = await vimeoAPI.post("/me/videos", {
+      upload: {
+        approach: "tus",
+        size, // in bytes
+      },
+      name: title,
+      description,
+    });
+
+    res.json({
+      uploadLink: response.data.upload.upload_link,
+      videoUri: response.data.uri,
+    });
+  } catch (error) {
+    console.error(
+      "Failed to create Vimeo upload link:",
+      error.response?.data || error.message
+    );
+    next(new AppError("Failed to get upload link from Vimeo", 502));
+  }
+};
+export const updateVimeoThumbnail = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const movie = await Movie.findById(id);
+    if (!movie) throw new NotFoundError("Movie not found");
+
+    if (!req.file) throw new BadRequestError("No image uploaded");
+
+    const result = await uploadThumbnailToVimeo(movie.vimeoId, req.file.path);
+
+    movie.thumbnail = result.link;
+    await movie.save();
+
+    res.json({
+      success: true,
+      message: "Thumbnail updated successfully",
+      thumbnail: movie.thumbnail,
+    });
+  } catch (error) {
+    next(error);
+  }
 };

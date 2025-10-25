@@ -4,7 +4,7 @@ import axios from "axios";
 import tus from "tus-js-client";
 import fs from "fs";
 import AppError from "../error/AppError.js";
-const vimeoAPI = axios.create({
+export const vimeoAPI = axios.create({
   baseURL: "https://api.vimeo.com",
   headers: {
     Authorization: `Bearer ${process.env.VIMEO_ACCESS_TOKEN}`,
@@ -90,5 +90,50 @@ export const deleteVideoFromVimeo = async (vimeoId) => {
   } catch (error) {
     console.error("Vimeo delete error:", error.response?.data || error.message);
     throw new AppError("Failed to delete video from Vimeo", 502);
+  }
+};
+import axios from "axios";
+import fs from "fs";
+import AppError from "../error/AppError.js";
+
+export const uploadThumbnailToVimeo = async (videoId, imagePath) => {
+  try {
+    const createRes = await axios.post(
+      `https://api.vimeo.com/videos/${videoId}/pictures`,
+      {},
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.VIMEO_ACCESS_TOKEN}`,
+        },
+      }
+    );
+
+    const uploadLink = createRes.data.link;
+
+    const image = fs.readFileSync(imagePath);
+    await axios.put(uploadLink, image, {
+      headers: {
+        "Content-Type": "image/jpeg",
+      },
+    });
+
+    const pictureId = createRes.data.uri.split("/").pop();
+    await axios.patch(
+      `https://api.vimeo.com/videos/${videoId}/pictures/${pictureId}`,
+      { active: true },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.VIMEO_ACCESS_TOKEN}`,
+        },
+      }
+    );
+
+    return createRes.data;
+  } catch (error) {
+    console.error(
+      "Error uploading thumbnail:",
+      error.response?.data || error.message
+    );
+    throw new AppError("Failed to upload thumbnail", 502);
   }
 };
