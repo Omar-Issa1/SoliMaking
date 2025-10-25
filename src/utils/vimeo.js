@@ -3,6 +3,7 @@ dotenv.config();
 import axios from "axios";
 import tus from "tus-js-client";
 import fs from "fs";
+import AppError from "../error/AppError.js";
 const vimeoAPI = axios.create({
   baseURL: "https://api.vimeo.com",
   headers: {
@@ -31,7 +32,7 @@ export const uploadVideo = async (videoUrl, title, description) => {
     return response.data;
   } catch (error) {
     console.error("Vimeo upload error:", error.response?.data || error.message);
-    throw new Error("Vimeo upload failed");
+    throw new AppError("Vimeo upload failed", 502);
   }
 };
 
@@ -42,7 +43,7 @@ export const getVideoDetails = async (videoId) => {
     return response.data;
   } catch (error) {
     console.error("Vimeo API error:", error.response?.data || error.message);
-    throw new Error("Failed to fetch video details");
+    throw new AppError("Failed to fetch video details", 502);
   }
 };
 
@@ -64,7 +65,7 @@ export const uploadLocalVideo = async (filePath, title, description) => {
       },
       onError: (error) => {
         console.error("Vimeo upload error:", error);
-        reject(error);
+        reject(new AppError("Vimeo upload failed", 502));
       },
       onSuccess: () => {
         console.log("Upload completed:", upload.url);
@@ -88,6 +89,6 @@ export const deleteVideoFromVimeo = async (vimeoId) => {
     return response.status === 204;
   } catch (error) {
     console.error("Vimeo delete error:", error.response?.data || error.message);
-    throw new Error("Failed to delete video from Vimeo");
+    throw new AppError("Failed to delete video from Vimeo", 502);
   }
 };
