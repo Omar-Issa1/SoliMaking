@@ -1,4 +1,5 @@
-import Movie from "../models/Movie.js";
+import fs from "fs";
+import { Vimeo } from "@vimeo/vimeo";
 import {
   AppError,
   BadRequestError,
@@ -10,11 +11,13 @@ import {
   getVideoDetails,
   deleteVideoFromVimeo,
   uploadThumbnailToVimeo,
+  vimeoAPI,
 } from "../utils/vimeo.js";
+import Movie from "../models/Movie.js";
 import { uploadLocalVideo } from "../utils/vimeoUploader.js";
 import mongoose from "mongoose";
-import { vimeoAPI } from "../utils/vimeo.js";
-
+import dotenv from "dotenv";
+dotenv.config();
 export const addMovie = async (req, res, next) => {
   const { title, description, vimeoUrl } = req.body;
 
@@ -177,57 +180,100 @@ export const updateVimeoThumbnail = async (req, res, next) => {
     thumbnail: movie.thumbnail,
   });
 };
+const client = new Vimeo(
+  process.env.VIMEO_CLIENT_ID,
+  process.env.VIMEO_CLIENT_SECRET,
+  process.env.VIMEO_ACCESS_TOKEN
+);
+
+// 🟢 رفع الفيديو محليًا ثم تسجيله تلقائيًا في قاعدة البيانات
 export const uploadLocalVideoController = async (req, res, next) => {
   if (!req.file) throw new BadRequestError("No video file uploaded");
 
   const { title, description } = req.body;
+  const filePath = req.file.path;
 
-  const videoUrl = await uploadLocalVideo(req.file.path, title, description);
-  if (!videoUrl) throw new AppError("Video upload failed", 502);
+  try {
+    // 1️⃣ رفع الفيديو إلى Vimeo مباشرة من السيرفر
+    const videoUri = await new Promise((resolve, reject) => {
+      client.upload(
+        filePath,
+        {
+          name: title || "Untitled Video",
+          description: description || "",
+          privacy: { view: "unlisted" },
+        },
+        function (uri) {
+          resolve(uri);
+        },
+        function (bytesUploaded, bytesTotal) {
+          const percent = ((bytesUploaded / bytesTotal) * 100).toFixed(2);
+          process.stdout.write(`Uploading... ${percent}%\r`);
+        },
+        function (error) {
+          reject(new AppError(error.message, 502));
+        }
+      );
+    });
 
-  const vimeoId = videoUrl.match(/vimeo\.com\/(\d+)/)?.[1];
-  if (!vimeoId) throw new AppError("Invalid Vimeo video URL returned", 500);
+    const vimeoId = videoUri.split("/").pop();
+    const vimeoUrl = `https://vimeo.com/${vimeoId}`;
 
-  const existing = await Movie.findOne({ vimeoId });
-  if (existing) throw new BadRequestError("This video already exists");
+    // 2️⃣ حذف الملف المؤقت من السيرفر
+    await fs.promises.unlink(filePath).catch(() => {});
 
-  const video = await getVideoDetails(vimeoId);
+    // 3️⃣ التحقق من وجود نفس الفيديو مسبقًا
+    const existing = await Movie.findOne({ vimeoId });
+    if (existing)
+      throw new BadRequestError("This video already exists in the database");
 
-  const movie = await Movie.create({
-    title: video.name || title,
-    description: video.description || description,
-    vimeoId,
-    vimeoUrl: video.link,
-    thumbnail: video.pictures?.sizes?.at(-1)?.link || null,
-    duration: video.duration || null,
-    width: video.width || null,
-    height: video.height || null,
-    uploadDate: video.created_time || null,
-    modifiedAt: video.modified_time || null,
-    privacy: video.privacy?.view || null,
-    status: video.status || null,
-    transcodeStatus: video.transcode?.status || null,
-    embedHtml: video.embed?.html || null,
-    tags: video.tags || [],
-    files: video.files || [],
-    stats: {
-      plays: video.stats?.plays || 0,
-      likes: video.metadata?.connections?.likes?.total || 0,
-      comments: video.metadata?.connections?.comments?.total || 0,
-    },
-    uploader: {
-      name: video.user?.name || null,
-      link: video.user?.link || null,
-      picture: video.user?.pictures?.sizes?.[1]?.link || null,
-      accountType: video.user?.account_type || null,
-    },
-  });
+    // 4️⃣ جلب بيانات الفيديو من Vimeo
+    const video = await getVideoDetails(vimeoId);
+    const pictures = video.pictures?.sizes || [];
+    const largestPicture = pictures.at(-1)?.link;
+    const secondLargest = pictures.at(-2)?.link;
 
-  await fs.promises.unlink(req.file.path).catch(() => {});
+    // 5️⃣ تصنيف طول الفيديو (Short / Medium / Long)
+    const duration = video.duration || 0;
+    const lengthCategory =
+      duration < 600 ? "Short" : duration < 1800 ? "Medium" : "Long";
 
-  res.status(201).json({
-    success: true,
-    message: "Video uploaded & saved successfully",
-    movie,
-  });
+    // 6️⃣ إنشاء السجل في قاعدة البيانات
+    const movie = await Movie.create({
+      title: video.name || title,
+      description: video.description || description,
+      vimeoId,
+      vimeoUrl: video.link,
+      thumbnail: largestPicture,
+      backdropUrl: secondLargest,
+      duration,
+      lengthCategory,
+      uploadDate: video.created_time || null,
+      privacy: video.privacy?.view || null,
+      transcodeStatus: video.transcode?.status || null,
+      embedHtml: video.embed?.html || null,
+      tags: video.tags || [],
+      stats: {
+        plays: video.stats?.plays || 0,
+        likes: video.metadata?.connections?.likes?.total || 0,
+        comments: video.metadata?.connections?.comments?.total || 0,
+      },
+      uploader: {
+        name: video.user?.name || null,
+        link: video.user?.link || null,
+        picture: video.user?.pictures?.sizes?.at(-1)?.link || null,
+        accountType: video.user?.account_type || null,
+      },
+    });
+
+    // 7️⃣ إرسال الاستجابة النهائية
+    res.status(201).json({
+      success: true,
+      message: "✅ Video uploaded & saved successfully",
+      movie,
+    });
+  } catch (err) {
+    console.error("❌ Error in uploadLocalVideoController:", err);
+    next(err);
+  }
 };

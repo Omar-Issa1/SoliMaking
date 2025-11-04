@@ -1,13 +1,20 @@
 import express from "express";
 import dotenv from "dotenv";
 dotenv.config();
+import fs from "fs";
+import path from "path";
 import cors from "cors";
 import morgan from "morgan";
 import connectDB from "./config/db.js";
+import "./utils/cleanTmpFolder.js";
 import movieRoutes from "./routes/movies.js";
 import { errorHandler } from "./middlewares/errorHandler.js";
 import notFound from "./middlewares/not-found.js";
-
+const tmpDir = path.resolve("tmp");
+if (!fs.existsSync(tmpDir)) {
+  fs.mkdirSync(tmpDir, { recursive: true });
+  console.log("Created tmp directory");
+}
 const app = express();
 
 app.use(express.json());
