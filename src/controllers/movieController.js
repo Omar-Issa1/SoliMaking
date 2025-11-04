@@ -5,28 +5,32 @@ import {
   NotFoundError,
   UnauthenticatedError,
 } from "../error/index.js";
-import fs from "fs";
 import {
   uploadVideo,
   getVideoDetails,
   deleteVideoFromVimeo,
   uploadThumbnailToVimeo,
 } from "../utils/vimeo.js";
+import { uploadLocalVideo } from "../utils/vimeoUploader.js";
 import mongoose from "mongoose";
 import { vimeoAPI } from "../utils/vimeo.js";
+
 export const addMovie = async (req, res, next) => {
   const { title, description, vimeoUrl } = req.body;
 
-  if (!title || !vimeoUrl) {
-    throw new BadRequestError("Title and Vimeo URL are required", 400);
-  }
+  if (!title || !vimeoUrl)
+    throw new BadRequestError("Title and Vimeo URL are required");
 
   const vimeoId = vimeoUrl.match(/vimeo\.com\/(?:video\/)?(\d+)/)?.[1];
   if (!vimeoId) throw new BadRequestError("Invalid Vimeo URL");
+
+  const existingMovie = await Movie.findOne({ vimeoId });
+  if (existingMovie)
+    throw new BadRequestError("This video already exists in the database");
+
   const video = await getVideoDetails(vimeoId);
 
   const movie = await Movie.create({
-    // Basic info
     title: video.name || title,
     description: video.description || description,
     vimeoId,
@@ -37,21 +41,17 @@ export const addMovie = async (req, res, next) => {
     height: video.height || null,
     uploadDate: video.created_time || null,
     modifiedAt: video.modified_time || null,
-
-    // Data groups
     privacy: video.privacy?.view || null,
     status: video.status || null,
     transcodeStatus: video.transcode?.status || null,
     embedHtml: video.embed?.html || null,
     tags: video.tags || [],
     files: video.files || [],
-    // Stats
     stats: {
       plays: video.stats?.plays || 0,
       likes: video.metadata?.connections?.likes?.total || 0,
       comments: video.metadata?.connections?.comments?.total || 0,
     },
-    // Uploader info
     uploader: {
       name: video.user?.name || null,
       link: video.user?.link || null,
@@ -62,6 +62,7 @@ export const addMovie = async (req, res, next) => {
 
   res.status(201).json(movie);
 };
+
 export const getMovies = async (req, res, next) => {
   const page = Number(req.query.page) || 1;
   const limit = Number(req.query.limit) || 10;
@@ -81,17 +82,15 @@ export const getMovies = async (req, res, next) => {
     movies,
   });
 };
+
 export const getMovieById = async (req, res, next) => {
   const { id } = req.params;
 
-  if (!mongoose.Types.ObjectId.isValid(id)) {
-    throw new BadRequestError("Invalid movie ID", 400);
-  }
+  if (!mongoose.Types.ObjectId.isValid(id))
+    throw new BadRequestError("Invalid movie ID");
 
   const movie = await Movie.findById(id);
-  if (!movie) {
-    throw new NotFoundError("Movie not found", 404);
-  }
+  if (!movie) throw new NotFoundError("Movie not found");
 
   const details = await getVideoDetails(movie.vimeoId);
 
@@ -100,12 +99,12 @@ export const getMovieById = async (req, res, next) => {
     vimeo: details,
   });
 };
+
 export const updateMovie = async (req, res, next) => {
   const { id } = req.params;
 
-  if (!mongoose.Types.ObjectId.isValid(id)) {
-    throw new BadRequestError("Invalid movie ID", 400);
-  }
+  if (!mongoose.Types.ObjectId.isValid(id))
+    throw new BadRequestError("Invalid movie ID");
 
   const allowedUpdates = ["title", "description"];
   const filtered = Object.fromEntries(
@@ -117,9 +116,7 @@ export const updateMovie = async (req, res, next) => {
     runValidators: true,
   });
 
-  if (!updatedMovie) {
-    throw new NotFoundError("Movie not found", 404);
-  }
+  if (!updatedMovie) throw new NotFoundError("Movie not found");
 
   res.json(updatedMovie);
 };
@@ -127,18 +124,13 @@ export const updateMovie = async (req, res, next) => {
 export const deleteMovie = async (req, res, next) => {
   const { id } = req.params;
 
-  if (!mongoose.Types.ObjectId.isValid(id)) {
-    throw new BadRequestError("Invalid movie ID", 400);
-  }
+  if (!mongoose.Types.ObjectId.isValid(id))
+    throw new BadRequestError("Invalid movie ID");
 
   const movie = await Movie.findById(id);
-  if (!movie) {
-    throw new NotFoundError("Movie not found", 404);
-  }
+  if (!movie) throw new NotFoundError("Movie not found");
 
-  if (movie.vimeoId) {
-    await deleteVideoFromVimeo(movie.vimeoId);
-  }
+  if (movie.vimeoId) await deleteVideoFromVimeo(movie.vimeoId);
 
   await Movie.findByIdAndDelete(id);
 
@@ -146,51 +138,96 @@ export const deleteMovie = async (req, res, next) => {
     message: "Movie deleted successfully from DB (and Vimeo if possible)",
   });
 };
+
 export const getVimeoUploadLink = async (req, res, next) => {
-  try {
-    const { size, title, description } = req.body;
+  const { size, title, description } = req.body;
 
-    const response = await vimeoAPI.post("/me/videos", {
-      upload: {
-        approach: "tus",
-        size, // in bytes
-      },
-      name: title,
-      description,
-    });
+  if (!size || !title) throw new BadRequestError("Size and title are required");
 
-    res.json({
-      uploadLink: response.data.upload.upload_link,
-      videoUri: response.data.uri,
-    });
-  } catch (error) {
-    console.error(
-      "Failed to create Vimeo upload link:",
-      error.response?.data || error.message
-    );
-    next(new AppError("Failed to get upload link from Vimeo", 502));
-  }
+  const response = await vimeoAPI.post("/me/videos", {
+    upload: { approach: "tus", size },
+    name: title,
+    description,
+  });
+
+  res.json({
+    uploadLink: response.data.upload.upload_link,
+    videoUri: response.data.uri,
+  });
 };
+
 export const updateVimeoThumbnail = async (req, res, next) => {
-  try {
-    const { id } = req.params;
+  const { id } = req.params;
 
-    const movie = await Movie.findById(id);
-    if (!movie) throw new NotFoundError("Movie not found");
+  if (!mongoose.Types.ObjectId.isValid(id))
+    throw new BadRequestError("Invalid movie ID");
 
-    if (!req.file) throw new BadRequestError("No image uploaded");
+  const movie = await Movie.findById(id);
+  if (!movie) throw new NotFoundError("Movie not found");
+  if (!req.file) throw new BadRequestError("No image uploaded");
 
-    const result = await uploadThumbnailToVimeo(movie.vimeoId, req.file.path);
+  const result = await uploadThumbnailToVimeo(movie.vimeoId, req.file.path);
 
-    movie.thumbnail = result.link;
-    await movie.save();
+  movie.thumbnail = result.link;
+  await movie.save();
 
-    res.json({
-      success: true,
-      message: "Thumbnail updated successfully",
-      thumbnail: movie.thumbnail,
-    });
-  } catch (error) {
-    next(error);
-  }
+  res.json({
+    success: true,
+    message: "Thumbnail updated successfully",
+    thumbnail: movie.thumbnail,
+  });
+};
+export const uploadLocalVideoController = async (req, res, next) => {
+  if (!req.file) throw new BadRequestError("No video file uploaded");
+
+  const { title, description } = req.body;
+
+  const videoUrl = await uploadLocalVideo(req.file.path, title, description);
+  if (!videoUrl) throw new AppError("Video upload failed", 502);
+
+  const vimeoId = videoUrl.match(/vimeo\.com\/(\d+)/)?.[1];
+  if (!vimeoId) throw new AppError("Invalid Vimeo video URL returned", 500);
+
+  const existing = await Movie.findOne({ vimeoId });
+  if (existing) throw new BadRequestError("This video already exists");
+
+  const video = await getVideoDetails(vimeoId);
+
+  const movie = await Movie.create({
+    title: video.name || title,
+    description: video.description || description,
+    vimeoId,
+    vimeoUrl: video.link,
+    thumbnail: video.pictures?.sizes?.at(-1)?.link || null,
+    duration: video.duration || null,
+    width: video.width || null,
+    height: video.height || null,
+    uploadDate: video.created_time || null,
+    modifiedAt: video.modified_time || null,
+    privacy: video.privacy?.view || null,
+    status: video.status || null,
+    transcodeStatus: video.transcode?.status || null,
+    embedHtml: video.embed?.html || null,
+    tags: video.tags || [],
+    files: video.files || [],
+    stats: {
+      plays: video.stats?.plays || 0,
+      likes: video.metadata?.connections?.likes?.total || 0,
+      comments: video.metadata?.connections?.comments?.total || 0,
+    },
+    uploader: {
+      name: video.user?.name || null,
+      link: video.user?.link || null,
+      picture: video.user?.pictures?.sizes?.[1]?.link || null,
+      accountType: video.user?.account_type || null,
+    },
+  });
+
+  await fs.promises.unlink(req.file.path).catch(() => {});
+
+  res.status(201).json({
+    success: true,
+    message: "Video uploaded & saved successfully",
+    movie,
+  });
 };
