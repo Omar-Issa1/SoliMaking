@@ -1,4 +1,5 @@
 import express from "express";
+const app = express();
 import dotenv from "dotenv";
 dotenv.config();
 import fs from "fs";
@@ -10,20 +11,38 @@ import "./utils/cleanTmpFolder.js";
 import movieRoutes from "./routes/movies.js";
 import { errorHandler } from "./middlewares/errorHandler.js";
 import notFound from "./middlewares/not-found.js";
+import authRouter from "./routes/auth.js";
+import authenticateUser from "./middlewares/authentication.js";
+import helmet from "helmet";
+import rateLimiter from "express-rate-limit";
+app.set("trust proxy", 1);
+
+app.use(
+  rateLimiter({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100, // limit each IP to 100 requests per windowMs
+  })
+);
 const tmpDir = path.resolve("tmp");
 if (!fs.existsSync(tmpDir)) {
   fs.mkdirSync(tmpDir, { recursive: true });
   console.log("Created tmp directory");
 }
-const app = express();
 
 app.use(express.json());
+
 app.use(cors());
 app.use(morgan("dev"));
+app.use(helmet());
+app.use((req, res, next) => {
+  console.log("Origin:", req.headers.origin);
+  next();
+});
 
 connectDB();
 
-app.use("/api/v1/movies", movieRoutes);
+app.use("/api/v1/movies", authenticateUser, movieRoutes);
+app.use("/api/v1/auth", authRouter);
 app.use(notFound);
 app.use(errorHandler);
 
