@@ -14,7 +14,7 @@ import notFound from "./middlewares/not-found.js";
 import authRouter from "./routes/auth.js";
 import authenticateUser from "./middlewares/authentication.js";
 import categoryRoutes from "./routes/categories.js";
-
+import recommendations from "./routes/recommendations.js";
 import helmet from "helmet";
 import rateLimiter from "express-rate-limit";
 app.set("trust proxy", 1);
@@ -46,6 +46,7 @@ connectDB();
 app.use("/api/v1/movies", authenticateUser, movieRoutes);
 app.use("/api/v1/auth", authRouter);
 app.use("/api/v1/categories", authenticateUser, categoryRoutes);
+app.use("/api/v1/recommendations", authenticateUser, recommendations);
 app.use(notFound);
 app.use(errorHandler);
 

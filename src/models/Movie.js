@@ -26,6 +26,18 @@ const MovieSchema = new mongoose.Schema(
       picture: { type: String, default: "" },
       accountType: { type: String, default: null },
     },
+    score: {
+      type: Number,
+      default: 0,
+    },
+    views: {
+      type: Number,
+      default: 0,
+    },
+    likes: {
+      type: Number,
+      default: 0,
+    },
 
     files: { type: Array, default: [] },
     tags: { type: Array, default: [] },

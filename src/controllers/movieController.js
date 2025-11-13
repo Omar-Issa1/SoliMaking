@@ -17,6 +17,8 @@ import Movie from "../models/Movie.js";
 import { uploadLocalVideo } from "../utils/vimeoUploader.js";
 import mongoose from "mongoose";
 import dotenv from "dotenv";
+import Interaction from "../models/UserInteraction.js";
+
 dotenv.config();
 export const addMovie = async (req, res, next) => {
   const { title, description, vimeoUrl } = req.body;
@@ -188,7 +190,6 @@ const client = new Vimeo(
   process.env.VIMEO_ACCESS_TOKEN
 );
 
-// 🟢 رفع الفيديو محليًا ثم تسجيله تلقائيًا في قاعدة البيانات
 export const uploadLocalVideoController = async (req, res, next) => {
   if (!req.file) throw new BadRequestError("No video file uploaded");
 
@@ -209,7 +210,6 @@ export const uploadLocalVideoController = async (req, res, next) => {
   const filePath = req.file.path;
 
   try {
-    // 1️⃣ رفع الفيديو إلى Vimeo مباشرة من السيرفر
     const videoUri = await new Promise((resolve, reject) => {
       client.upload(
         filePath,
@@ -234,26 +234,21 @@ export const uploadLocalVideoController = async (req, res, next) => {
     const vimeoId = videoUri.split("/").pop();
     const vimeoUrl = `https://vimeo.com/${vimeoId}`;
 
-    // 2️⃣ حذف الملف المؤقت من السيرفر
     await fs.promises.unlink(filePath).catch(() => {});
 
-    // 3️⃣ التحقق من وجود نفس الفيديو مسبقًا
     const existing = await Movie.findOne({ vimeoId });
     if (existing)
       throw new BadRequestError("This video already exists in the database");
 
-    // 4️⃣ جلب بيانات الفيديو من Vimeo
     const video = await getVideoDetails(vimeoId);
     const pictures = video.pictures?.sizes || [];
     const largestPicture = pictures.at(-1)?.link;
     const secondLargest = pictures.at(-2)?.link;
 
-    // 5️⃣ تصنيف طول الفيديو (Short / Medium / Long)
     const duration = video.duration || 0;
     const lengthCategory =
       duration < 600 ? "Short" : duration < 1800 ? "Medium" : "Long";
 
-    // 6️⃣ إنشاء السجل في قاعدة البيانات
     const movie = await Movie.create({
       title: video.name || title,
       description: video.description || description,
@@ -282,7 +277,6 @@ export const uploadLocalVideoController = async (req, res, next) => {
       categories,
     });
 
-    // 7️⃣ إرسال الاستجابة النهائية
     res.status(201).json({
       success: true,
       message: "✅ Video uploaded & saved successfully",
@@ -290,6 +284,20 @@ export const uploadLocalVideoController = async (req, res, next) => {
     });
   } catch (err) {
     console.error("❌ Error in uploadLocalVideoController:", err);
+    next(err);
+  }
+};
+export const registerView = async (req, res, next) => {
+  try {
+    const movieId = req.params.id;
+    const userId = req.user?.id || null;
+
+    await Interaction.create({ movieId, userId, action: "view" });
+
+    await Movie.findByIdAndUpdate(movieId, { $inc: { "stats.plays": 1 } });
+
+    res.status(201).json({ success: true });
+  } catch (err) {
     next(err);
   }
 };
