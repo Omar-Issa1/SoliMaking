@@ -32,11 +32,23 @@ const MovieSchema = new mongoose.Schema(
       picture: { type: String, default: "" },
       accountType: { type: String, default: null },
     },
-    score: { type: Number, default: 0, index: true },
-    views: { type: Number, default: 0 },
-    likes: { type: Number, default: 0 },
+    score: {
+      type: Number,
+      default: 0,
+      index: true,
+    },
+    views: {
+      type: Number,
+      default: 0,
+    },
+    likes: {
+      type: Number,
+      default: 0,
+    },
+
     files: { type: Array, default: [] },
     tags: { type: Array, default: [] },
+
     categories: [
       {
         type: mongoose.Schema.Types.ObjectId,
@@ -47,8 +59,5 @@ const MovieSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
-
-MovieSchema.index({ categories: 1 });
-MovieSchema.index({ score: -1 });
 
 export default mongoose.model("Movie", MovieSchema);
