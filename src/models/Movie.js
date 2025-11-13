@@ -26,9 +26,17 @@ const MovieSchema = new mongoose.Schema(
       picture: { type: String, default: "" },
       accountType: { type: String, default: null },
     },
+
     files: { type: Array, default: [] },
     tags: { type: Array, default: [] },
+    categories: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Category",
+      },
+    ],
   },
+
   { timestamps: true }
 );
 

@@ -71,6 +71,7 @@ export const getMovies = async (req, res, next) => {
   const limit = Number(req.query.limit) || 10;
 
   const movies = await Movie.find()
+    .populate("categories", "name slug")
     .sort({ createdAt: -1 })
     .skip((page - 1) * limit)
     .limit(limit);
@@ -92,7 +93,8 @@ export const getMovieById = async (req, res, next) => {
   if (!mongoose.Types.ObjectId.isValid(id))
     throw new BadRequestError("Invalid movie ID");
 
-  const movie = await Movie.findById(id);
+  const movie = await Movie.findById(id).populate("categories", "name slug");
+
   if (!movie) throw new NotFoundError("Movie not found");
 
   const details = await getVideoDetails(movie.vimeoId);
@@ -191,6 +193,19 @@ export const uploadLocalVideoController = async (req, res, next) => {
   if (!req.file) throw new BadRequestError("No video file uploaded");
 
   const { title, description } = req.body;
+  let { categories } = req.body;
+
+  if (categories) {
+    try {
+      categories = JSON.parse(categories); // frontend sends JSON array
+    } catch (e) {
+      throw new BadRequestError("Categories must be a valid JSON array");
+    }
+
+    if (!Array.isArray(categories))
+      throw new BadRequestError("Categories must be an array");
+  }
+
   const filePath = req.file.path;
 
   try {
@@ -264,6 +279,7 @@ export const uploadLocalVideoController = async (req, res, next) => {
         picture: video.user?.pictures?.sizes?.at(-1)?.link || null,
         accountType: video.user?.account_type || null,
       },
+      categories,
     });
 
     // 7️⃣ إرسال الاستجابة النهائية
