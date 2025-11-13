@@ -190,102 +190,110 @@ const client = new Vimeo(
   process.env.VIMEO_ACCESS_TOKEN
 );
 
+// helper: wait until transcode complete (poll)
+const waitForTranscode = async (
+  vimeoId,
+  timeoutMs = 5 * 60 * 1000,
+  intervalMs = 5000
+) => {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const info = await getVideoDetails(vimeoId);
+    const status = info.transcode?.status || info.status;
+    // Vimeo may expose transcode.status === "complete" or status === "available"
+    if (status === "complete" || status === "available") return info;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  throw new AppError(
+    "Timeout waiting for Vimeo to finish processing the video",
+    504
+  );
+};
+
 export const uploadLocalVideoController = async (req, res, next) => {
   if (!req.file) throw new BadRequestError("No video file uploaded");
 
   const { title, description } = req.body;
-  let { categories } = req.body;
+  let categories = req.body.categories;
 
   if (categories) {
-    try {
-      categories = JSON.parse(categories); // frontend sends JSON array
-    } catch (e) {
-      throw new BadRequestError("Categories must be a valid JSON array");
+    if (typeof categories === "string") {
+      try {
+        categories = JSON.parse(categories);
+      } catch (err) {
+        categories = categories
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+      }
     }
-
-    if (!Array.isArray(categories))
-      throw new BadRequestError("Categories must be an array");
+    if (!Array.isArray(categories)) categories = [categories];
   }
 
   const filePath = req.file.path;
 
-  try {
-    const videoUri = await new Promise((resolve, reject) => {
-      client.upload(
-        filePath,
-        {
-          name: title || "Untitled Video",
-          description: description || "",
-          privacy: { view: "unlisted" },
-        },
-        function (uri) {
-          resolve(uri);
-        },
-        function (bytesUploaded, bytesTotal) {
-          const percent = ((bytesUploaded / bytesTotal) * 100).toFixed(2);
-          process.stdout.write(`Uploading... ${percent}%\r`);
-        },
-        function (error) {
-          reject(new AppError(error.message, 502));
-        }
-      );
-    });
+  const { uri, vimeoId, vimeoUrl } = await uploadLocalVideo(
+    filePath,
+    title,
+    description
+  );
 
-    const vimeoId = videoUri.split("/").pop();
-    const vimeoUrl = `https://vimeo.com/${vimeoId}`;
+  const videoInfo = await waitForTranscode(vimeoId).catch(async (err) => {
+    // if transcode times out or fails, attempt to cleanup the video on Vimeo (best effort) then rethrow
+    await deleteVideoFromVimeo(vimeoId).catch(() => {});
+    throw err;
+  });
 
-    await fs.promises.unlink(filePath).catch(() => {});
-
-    const existing = await Movie.findOne({ vimeoId });
-    if (existing)
-      throw new BadRequestError("This video already exists in the database");
-
-    const video = await getVideoDetails(vimeoId);
-    const pictures = video.pictures?.sizes || [];
-    const largestPicture = pictures.at(-1)?.link;
-    const secondLargest = pictures.at(-2)?.link;
-
-    const duration = video.duration || 0;
-    const lengthCategory =
-      duration < 600 ? "Short" : duration < 1800 ? "Medium" : "Long";
-
-    const movie = await Movie.create({
-      title: video.name || title,
-      description: video.description || description,
-      vimeoId,
-      vimeoUrl: video.link,
-      thumbnail: largestPicture,
-      backdropUrl: secondLargest,
-      duration,
-      lengthCategory,
-      uploadDate: video.created_time || null,
-      privacy: video.privacy?.view || null,
-      transcodeStatus: video.transcode?.status || null,
-      embedHtml: video.embed?.html || null,
-      tags: video.tags || [],
-      stats: {
-        plays: video.stats?.plays || 0,
-        likes: video.metadata?.connections?.likes?.total || 0,
-        comments: video.metadata?.connections?.comments?.total || 0,
-      },
-      uploader: {
-        name: video.user?.name || null,
-        link: video.user?.link || null,
-        picture: video.user?.pictures?.sizes?.at(-1)?.link || null,
-        accountType: video.user?.account_type || null,
-      },
-      categories,
-    });
-
-    res.status(201).json({
-      success: true,
-      message: "✅ Video uploaded & saved successfully",
-      movie,
-    });
-  } catch (err) {
-    console.error("❌ Error in uploadLocalVideoController:", err);
-    next(err);
+  const existing = await Movie.findOne({ vimeoId });
+  if (existing) {
+    // rollback on Vimeo (best-effort)
+    await deleteVideoFromVimeo(vimeoId).catch(() => {});
+    throw new BadRequestError("This video already exists in the database");
   }
+
+  const pictures = videoInfo.pictures?.sizes || [];
+  const largestPicture = pictures.at(-1)?.link || null;
+  const secondLargest = pictures.at(-2)?.link || null;
+  const duration = videoInfo.duration || 0;
+  const lengthCategory =
+    duration < 600 ? "Short" : duration < 1800 ? "Medium" : "Long";
+
+  const movie = await Movie.create({
+    title: videoInfo.name || title,
+    description: videoInfo.description || description,
+    vimeoId,
+    vimeoUrl: videoInfo.link || vimeoUrl,
+    thumbnail: largestPicture,
+    backdropUrl: secondLargest,
+    duration,
+    lengthCategory,
+    uploadDate: videoInfo.created_time || null,
+    privacy: videoInfo.privacy?.view || null,
+    transcodeStatus: videoInfo.transcode?.status || null,
+    embedHtml: videoInfo.embed?.html || null,
+    tags: videoInfo.tags || [],
+    files: videoInfo.files || [],
+    stats: {
+      plays: videoInfo.stats?.plays || 0,
+      likes: videoInfo.metadata?.connections?.likes?.total || 0,
+      comments: videoInfo.metadata?.connections?.comments?.total || 0,
+    },
+    uploader: {
+      name: videoInfo.user?.name || null,
+      link: videoInfo.user?.link || null,
+      picture: videoInfo.user?.pictures?.sizes?.at(-1)?.link || null,
+      accountType: videoInfo.user?.account_type || null,
+    },
+    categories,
+  });
+
+  await fs.promises.unlink(filePath).catch(() => {});
+
+  res.status(201).json({
+    success: true,
+    message: "Video uploaded & saved successfully",
+    movie,
+  });
 };
 export const registerView = async (req, res, next) => {
   try {

@@ -11,33 +11,35 @@ const client = new Vimeo(
   process.env.VIMEO_ACCESS_TOKEN
 );
 
-export const uploadLocalVideo = async (filePath, title, description) => {
+/**
+ * Upload a local file to Vimeo via official SDK.
+ * Returns: { uri, vimeoId, vimeoUrl }
+ */
+export const uploadLocalVideo = (filePath, title = "", description = "") => {
   return new Promise((resolve, reject) => {
     client.upload(
       filePath,
       {
         name: title || "Untitled Video",
         description: description || "",
-        privacy: { view: "unlisted" },
+        privacy: { view: "unlisted" }, // change if needed
       },
-      async function (uri) {
-        try {
-          const videoId = uri.split("/").pop();
-          const videoUrl = `https://vimeo.com/${videoId}`;
+      (uri) => {
+        const vimeoId = uri.split("/").pop();
+        const vimeoUrl = `https://vimeo.com/${vimeoId}`;
 
-          await fs.promises.unlink(filePath).catch(() => {});
+        fs.promises.unlink(filePath).catch(() => {});
 
-          resolve(videoUrl);
-        } catch (err) {
-          reject(new AppError("Error while cleaning up temp file", 500));
-        }
+        resolve({ uri, vimeoId, vimeoUrl });
       },
-      function (bytesUploaded, bytesTotal) {
+      (bytesUploaded, bytesTotal) => {
         const percent = ((bytesUploaded / bytesTotal) * 100).toFixed(2);
-        process.stdout.write(`Uploading... ${percent}%\r`);
+        process.stdout.write(`Uploading to Vimeo... ${percent}%\r`);
       },
-      function (error) {
-        reject(new AppError(error.message, 502));
+      (error) => {
+        const message =
+          error?.message || String(error) || "Vimeo upload failed";
+        reject(new AppError(message, 502));
       }
     );
   });

@@ -5,7 +5,7 @@ import winston from "winston";
 import "winston-daily-rotate-file";
 
 const TMP_DIR = path.resolve("tmp");
-const MAX_FILE_AGE_MINUTES = 30;
+const MAX_FILE_AGE_MINUTES = Number(process.env.MAX_FILE_AGE_MINUTES || 30);
 
 const transport = new winston.transports.DailyRotateFile({
   filename: "logs/tmp-cleanup-%DATE%.log",
@@ -29,11 +29,11 @@ const logger = winston.createLogger({
 
 async function deleteOldFiles() {
   try {
-    const files = await fs.promises.readdir(TMP_DIR);
+    const files = await fs.promises.readdir(TMP_DIR).catch(() => []);
     const now = Date.now();
     let deleteCount = 0;
 
-    const deletionPromises = files.map(async (file) => {
+    const promises = files.map(async (file) => {
       const filePath = path.join(TMP_DIR, file);
       try {
         const stats = await fs.promises.stat(filePath);
@@ -47,7 +47,7 @@ async function deleteOldFiles() {
       }
     });
 
-    await Promise.all(deletionPromises);
+    await Promise.all(promises);
 
     logger.info(
       `Deleted ${deleteCount} file(s) older than ${MAX_FILE_AGE_MINUTES} minutes from tmp/`
@@ -57,7 +57,7 @@ async function deleteOldFiles() {
   }
 }
 
-cron.schedule("*/10 * * * *", () => {
+cron.schedule(process.env.TMP_CLEAN_CRON || "*/10 * * * *", () => {
   logger.info("Running tmp cleanup task...");
   deleteOldFiles();
 });
