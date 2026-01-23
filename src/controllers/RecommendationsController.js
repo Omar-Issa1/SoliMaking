@@ -2,7 +2,6 @@ import Movie from "../models/Movie.js";
 import Interaction from "../models/Interaction.js";
 import { NotFoundError, BadRequestError } from "../error/index.js";
 
-// Action weights for user interactions
 const ACTION_WEIGHTS = {
   view: 1,
   like: 3,
@@ -10,7 +9,6 @@ const ACTION_WEIGHTS = {
   complete: 5,
 };
 
-// Algorithm configuration constants
 const CONFIG = {
   MAX_INTERACTIONS: 200,
   MAX_CANDIDATES_USER: 300,
@@ -19,15 +17,14 @@ const CONFIG = {
   CONTENT_WEIGHT: 0.4,
   BASE_SCORE_WEIGHT: 0.6,
   TRENDING_FALLBACK_LIMIT: 10,
-  CACHE_TTL: 300, // 5 minutes in seconds
-  TIME_DECAY_DAYS: 30, // Days for interaction decay
-  SERENDIPITY_RATIO: 0.15, // 15% surprise recommendations
-  RECENCY_WEIGHT: 0.1, // Weight for recent movies
-  MIN_CACHE_HITS: 3, // Minimum cache hits before extending TTL
+  CACHE_TTL: 300,
+  TIME_DECAY_DAYS: 30,
+  SERENDIPITY_RATIO: 0.15,
+  RECENCY_WEIGHT: 0.1,
+  MIN_CACHE_HITS: 3,
   MAX_CACHE_SIZE: 2000,
 };
 
-// Content-based recommendation weights
 const CONTENT_WEIGHTS = {
   CATEGORY: 3,
   LENGTH: 2,
@@ -36,7 +33,6 @@ const CONTENT_WEIGHTS = {
   KEYWORD: 1.5,
 };
 
-// Enhanced cache with metadata
 class RecommendationCache {
   constructor() {
     this.cache = new Map();
@@ -46,10 +42,8 @@ class RecommendationCache {
   get(key) {
     const entry = this.cache.get(key);
     if (entry) {
-      // Track cache hits
       this.hitCounts.set(key, (this.hitCounts.get(key) || 0) + 1);
 
-      // Check if expired
       if (Date.now() > entry.expiresAt) {
         this.cache.delete(key);
         this.hitCounts.delete(key);
@@ -61,7 +55,7 @@ class RecommendationCache {
   }
 
   set(key, data, ttl = CONFIG.CACHE_TTL) {
-    // Dynamic TTL based on cache hits
+    // Popular entries get double the TTL
     const hits = this.hitCounts.get(key) || 0;
     const adjustedTTL = hits >= CONFIG.MIN_CACHE_HITS ? ttl * 2 : ttl;
 
@@ -71,7 +65,6 @@ class RecommendationCache {
       createdAt: Date.now(),
     });
 
-    // Cleanup old entries
     if (this.cache.size > CONFIG.MAX_CACHE_SIZE) {
       this.cleanup();
     }
@@ -81,7 +74,6 @@ class RecommendationCache {
     const now = Date.now();
     const entries = Array.from(this.cache.entries());
 
-    // Remove expired entries
     entries.forEach(([key, value]) => {
       if (now > value.expiresAt) {
         this.cache.delete(key);
@@ -89,7 +81,7 @@ class RecommendationCache {
       }
     });
 
-    // If still too large, remove oldest entries
+    // Remove oldest 20% if still too large
     if (this.cache.size > CONFIG.MAX_CACHE_SIZE) {
       const sortedByAge = entries
         .sort((a, b) => a[1].createdAt - b[1].createdAt)
@@ -127,42 +119,29 @@ class RecommendationCache {
 
 const recommendationCache = new RecommendationCache();
 
-/**
- * Cache key generator with user activity level
- */
 function getCacheKey(userId, type = "user", activityLevel = "normal") {
   const timeWindow = activityLevel === "high" ? 60 : CONFIG.CACHE_TTL;
   return `${type}_${userId}_${Math.floor(Date.now() / (timeWindow * 1000))}`;
 }
 
-/**
- * Calculate time decay weight for interactions
- */
 function calculateTimeDecay(timestamp) {
   const daysSince =
     (Date.now() - new Date(timestamp).getTime()) / (1000 * 60 * 60 * 24);
   return Math.exp(-daysSince / CONFIG.TIME_DECAY_DAYS);
 }
 
-/**
- * Calculate recency bonus for newer movies
- */
 function calculateRecencyBonus(releaseDate) {
   if (!releaseDate) return 0;
 
   const monthsSinceRelease =
     (Date.now() - new Date(releaseDate).getTime()) / (1000 * 60 * 60 * 24 * 30);
 
-  // Boost movies released in the last 6 months
   if (monthsSinceRelease < 6) {
     return (6 - monthsSinceRelease) * 2;
   }
   return 0;
 }
 
-/**
- * Add weight to a map for single key or array of keys
- */
 function addWeightToMap(map, key, weight) {
   if (!key) return;
 
@@ -177,9 +156,6 @@ function addWeightToMap(map, key, weight) {
   }
 }
 
-/**
- * Shuffle array using Fisher-Yates algorithm
- */
 function shuffleArray(array) {
   const shuffled = [...array];
   for (let i = shuffled.length - 1; i > 0; i--) {
@@ -189,18 +165,14 @@ function shuffleArray(array) {
   return shuffled;
 }
 
-/**
- * Enhanced diversification with balanced category distribution and randomization
- */
 function diversifyResults(
   sortedCandidates,
-  maxResults = CONFIG.DEFAULT_RESULT_LIMIT
+  maxResults = CONFIG.DEFAULT_RESULT_LIMIT,
 ) {
   if (!sortedCandidates || sortedCandidates.length === 0) {
     return [];
   }
 
-  // Group movies by categories
   const categoryGroups = new Map();
   const movieToCategories = new Map();
 
@@ -220,7 +192,6 @@ function diversifyResults(
     });
   });
 
-  // Shuffle each category group to add randomness
   categoryGroups.forEach((movies, category) => {
     categoryGroups.set(category, shuffleArray(movies));
   });
@@ -232,13 +203,12 @@ function diversifyResults(
       category,
       movies,
       index: 0,
-    })
+    }),
   );
 
-  // Shuffle category order for variety
   const shuffledIterators = shuffleArray(categoryIterators);
 
-  // Round-robin through categories
+  // Round-robin through categories for variety
   let iteratorIndex = 0;
   while (
     result.length < maxResults &&
@@ -262,7 +232,6 @@ function diversifyResults(
     iteratorIndex++;
   }
 
-  // Fill remaining slots if needed
   if (result.length < maxResults) {
     const remaining = sortedCandidates
       .filter((m) => !seenIds.has(String(m._id)))
@@ -273,16 +242,13 @@ function diversifyResults(
   return result.slice(0, maxResults);
 }
 
-/**
- * Add serendipity - surprise highly-rated movies from different genres
- */
+// Inject highly-rated movies from unfamiliar genres
 async function addSerendipity(recommendations, userId, seenIds, targetCount) {
   const surpriseCount = Math.ceil(targetCount * CONFIG.SERENDIPITY_RATIO);
 
   if (surpriseCount === 0) return recommendations;
 
   try {
-    // Get user's common categories
     const userCategories = new Set();
     recommendations.forEach((movie) => {
       if (Array.isArray(movie.categories)) {
@@ -290,25 +256,22 @@ async function addSerendipity(recommendations, userId, seenIds, targetCount) {
       }
     });
 
-    // Find highly-rated movies from different categories
     const surpriseMovies = await Movie.find({
       _id: {
         $nin: [...Array.from(seenIds), ...recommendations.map((r) => r._id)],
       },
       categories: { $nin: Array.from(userCategories) },
-      score: { $gte: 7.5 }, // High-rated movies only
+      score: { $gte: 7.5 },
     })
-      .limit(surpriseCount * 2) // Get more to pick randomly from
+      .limit(surpriseCount * 2)
       .lean();
 
     if (surpriseMovies.length > 0) {
-      // Randomly select surprises
       const shuffledSurprises = shuffleArray(surpriseMovies).slice(
         0,
-        surpriseCount
+        surpriseCount,
       );
 
-      // Mark as serendipity recommendations
       const markedSurprises = shuffledSurprises.map((movie) => ({
         ...movie,
         __reco: {
@@ -317,7 +280,6 @@ async function addSerendipity(recommendations, userId, seenIds, targetCount) {
         },
       }));
 
-      // Insert surprises at random positions
       const result = [...recommendations];
       markedSurprises.forEach((surprise) => {
         const randomPos = Math.floor(Math.random() * (result.length + 1));
@@ -333,9 +295,6 @@ async function addSerendipity(recommendations, userId, seenIds, targetCount) {
   return recommendations;
 }
 
-/**
- * Calculate content similarity score between user preferences and a movie
- */
 function calculateContentScore(movie, weightMaps, includeRecency = false) {
   const {
     categoryWeight,
@@ -346,7 +305,6 @@ function calculateContentScore(movie, weightMaps, includeRecency = false) {
   } = weightMaps;
   let score = 0;
 
-  // Categories
   if (Array.isArray(movie.categories)) {
     movie.categories.forEach((cat) => {
       if (categoryWeight[cat]) {
@@ -355,12 +313,10 @@ function calculateContentScore(movie, weightMaps, includeRecency = false) {
     });
   }
 
-  // Length category
   if (movie.lengthCategory && lengthWeight[movie.lengthCategory]) {
     score += lengthWeight[movie.lengthCategory];
   }
 
-  // Directors
   if (Array.isArray(movie.directors)) {
     movie.directors.forEach((director) => {
       if (directorWeight[director]) {
@@ -369,7 +325,6 @@ function calculateContentScore(movie, weightMaps, includeRecency = false) {
     });
   }
 
-  // Actors
   if (Array.isArray(movie.actors)) {
     movie.actors.forEach((actor) => {
       if (actorWeight[actor]) {
@@ -378,7 +333,6 @@ function calculateContentScore(movie, weightMaps, includeRecency = false) {
     });
   }
 
-  // Keywords
   if (Array.isArray(movie.keywords)) {
     movie.keywords.forEach((keyword) => {
       if (keywordWeight[keyword]) {
@@ -387,7 +341,6 @@ function calculateContentScore(movie, weightMaps, includeRecency = false) {
     });
   }
 
-  // Add recency bonus if enabled
   if (includeRecency && movie.releaseDate) {
     score += calculateRecencyBonus(movie.releaseDate);
   }
@@ -395,28 +348,23 @@ function calculateContentScore(movie, weightMaps, includeRecency = false) {
   return score;
 }
 
-/**
- * Calculate similarity score for content-based recommendations
- */
 function calculateSimilarityScore(
   candidateMovie,
   referenceMovie,
-  includeRecency = false
+  includeRecency = false,
 ) {
   let score = 0;
 
-  // Categories
   if (
     Array.isArray(candidateMovie.categories) &&
     Array.isArray(referenceMovie.categories)
   ) {
     const commonCategories = candidateMovie.categories.filter((c) =>
-      referenceMovie.categories.includes(c)
+      referenceMovie.categories.includes(c),
     ).length;
     score += commonCategories * CONTENT_WEIGHTS.CATEGORY;
   }
 
-  // Length category
   if (
     candidateMovie.lengthCategory &&
     candidateMovie.lengthCategory === referenceMovie.lengthCategory
@@ -424,40 +372,36 @@ function calculateSimilarityScore(
     score += CONTENT_WEIGHTS.LENGTH;
   }
 
-  // Directors
   if (
     Array.isArray(candidateMovie.directors) &&
     Array.isArray(referenceMovie.directors)
   ) {
     const commonDirectors = candidateMovie.directors.filter((d) =>
-      referenceMovie.directors.includes(d)
+      referenceMovie.directors.includes(d),
     ).length;
     score += commonDirectors * CONTENT_WEIGHTS.DIRECTOR;
   }
 
-  // Actors
   if (
     Array.isArray(candidateMovie.actors) &&
     Array.isArray(referenceMovie.actors)
   ) {
     const commonActors = candidateMovie.actors.filter((a) =>
-      referenceMovie.actors.includes(a)
+      referenceMovie.actors.includes(a),
     ).length;
     score += commonActors * CONTENT_WEIGHTS.ACTOR;
   }
 
-  // Keywords
   if (
     Array.isArray(candidateMovie.keywords) &&
     Array.isArray(referenceMovie.keywords)
   ) {
     const commonKeywords = candidateMovie.keywords.filter((k) =>
-      referenceMovie.keywords.includes(k)
+      referenceMovie.keywords.includes(k),
     ).length;
     score += commonKeywords * CONTENT_WEIGHTS.KEYWORD;
   }
 
-  // Add recency bonus if enabled
   if (includeRecency && candidateMovie.releaseDate) {
     score +=
       calculateRecencyBonus(candidateMovie.releaseDate) * CONFIG.RECENCY_WEIGHT;
@@ -466,13 +410,10 @@ function calculateSimilarityScore(
   return score;
 }
 
-/**
- * Get trending movies as fallback with optional diversity
- */
 async function getTrendingMovies(
   excludeIds = [],
   limit = CONFIG.TRENDING_FALLBACK_LIMIT,
-  diversify = true
+  diversify = true,
 ) {
   try {
     const query = excludeIds.length > 0 ? { _id: { $nin: excludeIds } } : {};
@@ -493,9 +434,6 @@ async function getTrendingMovies(
   }
 }
 
-/**
- * Build user preference weights from interactions with time decay
- */
 function buildUserPreferences(interactions) {
   const categoryWeight = {};
   const lengthWeight = {};
@@ -514,7 +452,6 @@ function buildUserPreferences(interactions) {
 
     seenIds.add(String(movie._id));
 
-    // Build weights for each attribute
     if (Array.isArray(movie.categories)) {
       addWeightToMap(categoryWeight, movie.categories, weight);
     }
@@ -546,9 +483,6 @@ function buildUserPreferences(interactions) {
   };
 }
 
-/**
- * Build query to find candidate movies based on user preferences
- */
 function buildCandidateQuery(preferences, seenIds) {
   const {
     categoryWeight,
@@ -592,18 +526,14 @@ function buildCandidateQuery(preferences, seenIds) {
   return candidateQuery;
 }
 
-/**
- * Score and rank candidates with enhanced scoring
- */
 function scoreAndRankCandidates(candidates, weightMaps, includeRecency = true) {
   let maxContentScore = 0;
 
-  // Calculate content scores
   const candidatesWithScores = candidates.map((movie) => {
     const contentScore = calculateContentScore(
       movie,
       weightMaps,
-      includeRecency
+      includeRecency,
     );
     if (contentScore > maxContentScore) {
       maxContentScore = contentScore;
@@ -619,7 +549,6 @@ function scoreAndRankCandidates(candidates, weightMaps, includeRecency = true) {
     };
   });
 
-  // Calculate total scores with normalization
   candidatesWithScores.forEach((candidate) => {
     const normalizedContent =
       maxContentScore > 0
@@ -632,10 +561,8 @@ function scoreAndRankCandidates(candidates, weightMaps, includeRecency = true) {
       candidate.recencyBonus * CONFIG.RECENCY_WEIGHT;
   });
 
-  // Sort by total score
   candidatesWithScores.sort((a, b) => b.totalScore - a.totalScore);
 
-  // Add recommendation metadata
   return candidatesWithScores.map((candidate) => ({
     ...candidate.movie,
     __reco: {
@@ -647,29 +574,20 @@ function scoreAndRankCandidates(candidates, weightMaps, includeRecency = true) {
   }));
 }
 
-/**
- * Determine user activity level for cache optimization
- */
 function getUserActivityLevel(interactionCount) {
   if (interactionCount > 100) return "high";
   if (interactionCount > 30) return "normal";
   return "low";
 }
 
-/**
- * Main recommendation endpoint for users
- * Personalized recommendations based on user interaction history
- */
 export const recommendForUserV2 = async (req, res) => {
   try {
-    // Validation
     if (!req.user || !req.user.id) {
       throw new BadRequestError("User ID is required");
     }
 
     const userId = req.user.id;
 
-    // Fetch user interactions first to determine activity level
     const interactions = await Interaction.find({ userId })
       .sort({ timestamp: -1 })
       .limit(CONFIG.MAX_INTERACTIONS)
@@ -678,7 +596,6 @@ export const recommendForUserV2 = async (req, res) => {
 
     const activityLevel = getUserActivityLevel(interactions.length);
 
-    // Check cache with activity-aware key
     const cacheKey = getCacheKey(userId, "user", activityLevel);
     const cached = recommendationCache.get(cacheKey);
 
@@ -686,71 +603,62 @@ export const recommendForUserV2 = async (req, res) => {
       return res.json(cached);
     }
 
-    // Fallback: No interactions found (cold start)
+    // Cold start: no interaction history
     if (!interactions || interactions.length === 0) {
       const trending = await getTrendingMovies(
         [],
         CONFIG.DEFAULT_RESULT_LIMIT,
-        true
+        true,
       );
       recommendationCache.set(cacheKey, trending);
       return res.json(trending);
     }
 
-    // Build user preferences from interactions
     const preferences = buildUserPreferences(interactions);
 
-    // Build candidate query
     const candidateQuery = buildCandidateQuery(
       preferences,
-      preferences.seenIds
+      preferences.seenIds,
     );
 
-    // Fallback: No candidate criteria
     if (candidateQuery.$or.length === 0) {
       const trending = await getTrendingMovies(
         Array.from(preferences.seenIds),
         CONFIG.DEFAULT_RESULT_LIMIT,
-        true
+        true,
       );
       recommendationCache.set(cacheKey, trending);
       return res.json(trending);
     }
 
-    // Fetch candidates
     const candidates = await Movie.find(candidateQuery)
       .limit(CONFIG.MAX_CANDIDATES_USER)
       .lean();
 
-    // Fallback: No candidates found
     if (!candidates || candidates.length === 0) {
       const trending = await getTrendingMovies(
         Array.from(preferences.seenIds),
         CONFIG.DEFAULT_RESULT_LIMIT,
-        true
+        true,
       );
       recommendationCache.set(cacheKey, trending);
       return res.json(trending);
     }
 
-    // Score and rank candidates
     const rankedMovies = scoreAndRankCandidates(candidates, preferences, true);
 
-    // Diversify results
     let diversifiedResults = diversifyResults(
       rankedMovies,
-      CONFIG.DEFAULT_RESULT_LIMIT
+      CONFIG.DEFAULT_RESULT_LIMIT,
     );
 
-    // Add serendipity (surprise recommendations)
     const finalRecommendations = await addSerendipity(
       diversifiedResults,
       userId,
       preferences.seenIds,
-      CONFIG.DEFAULT_RESULT_LIMIT
+      CONFIG.DEFAULT_RESULT_LIMIT,
     );
 
-    // Cache results with dynamic TTL based on activity
     const cacheTTL = activityLevel === "high" ? 60 : CONFIG.CACHE_TTL;
     recommendationCache.set(cacheKey, finalRecommendations, cacheTTL);
 
@@ -758,12 +666,11 @@ export const recommendForUserV2 = async (req, res) => {
   } catch (error) {
     console.error("Error in recommendForUserV2:", error);
 
-    // Graceful fallback on error
     try {
       const fallbackMovies = await getTrendingMovies(
         [],
         CONFIG.DEFAULT_RESULT_LIMIT,
-        true
+        true,
       );
       return res.json(fallbackMovies);
     } catch (fallbackError) {
@@ -773,20 +680,14 @@ export const recommendForUserV2 = async (req, res) => {
   }
 };
 
-/**
- * Content-based recommendations for a specific movie
- * Returns similar movies based on movie attributes
- */
 export const getContentRecommendationsV2 = async (req, res) => {
   try {
-    // Validation
     if (!req.params || !req.params.id) {
       throw new BadRequestError("Movie ID is required");
     }
 
     const movieId = req.params.id;
 
-    // Check cache
     const cacheKey = getCacheKey(movieId, "content");
     const cached = recommendationCache.get(cacheKey);
 
@@ -794,14 +695,12 @@ export const getContentRecommendationsV2 = async (req, res) => {
       return res.json(cached);
     }
 
-    // Fetch reference movie
     const movie = await Movie.findById(movieId).lean();
 
     if (!movie) {
       throw new NotFoundError("Movie not found");
     }
 
-    // Build candidate query
     const candidateQuery = {
       _id: { $ne: movie._id },
       $or: [],
@@ -827,34 +726,30 @@ export const getContentRecommendationsV2 = async (req, res) => {
       candidateQuery.$or.push({ keywords: { $in: movie.keywords } });
     }
 
-    // Fallback: No matching criteria
     if (candidateQuery.$or.length === 0) {
       const trending = await getTrendingMovies(
         [movie._id],
         CONFIG.TRENDING_FALLBACK_LIMIT,
-        true
+        true,
       );
       recommendationCache.set(cacheKey, trending);
       return res.json(trending);
     }
 
-    // Fetch candidates
     const candidates = await Movie.find(candidateQuery)
       .limit(CONFIG.MAX_CANDIDATES_CONTENT)
       .lean();
 
-    // Fallback: No candidates found
     if (!candidates || candidates.length === 0) {
       const trending = await getTrendingMovies(
         [movie._id],
         CONFIG.TRENDING_FALLBACK_LIMIT,
-        true
+        true,
       );
       recommendationCache.set(cacheKey, trending);
       return res.json(trending);
     }
 
-    // Calculate similarity scores
     let maxContentScore = 0;
     const scoredCandidates = candidates.map((candidate) => {
       const contentScore = calculateSimilarityScore(candidate, movie, true);
@@ -870,7 +765,6 @@ export const getContentRecommendationsV2 = async (req, res) => {
       };
     });
 
-    // Calculate total scores
     scoredCandidates.forEach((candidate) => {
       const normalizedContent =
         maxContentScore > 0
@@ -883,7 +777,6 @@ export const getContentRecommendationsV2 = async (req, res) => {
         candidate.recencyBonus * CONFIG.RECENCY_WEIGHT;
     });
 
-    // Sort and select top results
     scoredCandidates.sort((a, b) => b.totalScore - a.totalScore);
 
     const topResults = scoredCandidates
@@ -898,31 +791,28 @@ export const getContentRecommendationsV2 = async (req, res) => {
         },
       }));
 
-    // Diversify results
     const recommendations = diversifyResults(
       topResults,
-      CONFIG.TRENDING_FALLBACK_LIMIT
+      CONFIG.TRENDING_FALLBACK_LIMIT,
     );
 
-    // Cache results
     recommendationCache.set(cacheKey, recommendations);
 
     res.json(recommendations);
   } catch (error) {
     console.error("Error in getContentRecommendationsV2:", error);
 
-    // Graceful fallback on error
     try {
       const fallbackMovies = await getTrendingMovies(
         [],
         CONFIG.TRENDING_FALLBACK_LIMIT,
-        true
+        true,
       );
       return res.json(fallbackMovies);
     } catch (fallbackError) {
       console.error(
         "Error in fallback content recommendations:",
-        fallbackError
+        fallbackError,
       );
 
       if (error instanceof NotFoundError) {
@@ -933,9 +823,6 @@ export const getContentRecommendationsV2 = async (req, res) => {
   }
 };
 
-/**
- * Utility endpoint to clear cache (for admin/testing)
- */
 export const clearRecommendationCache = async (req, res) => {
   try {
     const { pattern } = req.query;
@@ -953,9 +840,6 @@ export const clearRecommendationCache = async (req, res) => {
   }
 };
 
-/**
- * Utility endpoint to get cache statistics (for monitoring)
- */
 export const getCacheStats = async (req, res) => {
   try {
     const stats = recommendationCache.getStats();
